@@ -1,31 +1,35 @@
-from flask import Flask, request, jsonify
+# pip install ytmusicapi syncedlyrics
 from ytmusicapi import YTMusic
+import syncedlyrics
 
-# Initialize Flask and YTMusic (with India location)
-app = Flask(__name__)
 yt = YTMusic(location="IN", language="en")
 
-@app.route('/')
-def home():
-    return jsonify({"message": "API is running! Use /suggestions?q=songname or /lyrics?id=videoid"})
-
-@app.route('/suggestions')
-def suggestions():
-    query = request.args.get('q', 'tum hi ho') # Default fallback query
-    results = yt.get_search_suggestions(query, detailed_runs=True)
-    return jsonify(results)
-
-@app.route('/lyrics')
-def lyrics():
-    video_id = request.args.get('id')
-    if not video_id:
-        return jsonify({"error": "Please provide a video id. Example: /lyrics?id=abc123xyz"}), 400
-    
+def get_best_lyrics(video_id, song_title, artist_name):
+    # 1. Try YouTube Music API first
     watch_playlist = yt.get_watch_playlist(videoId=video_id)
     lyrics_id = watch_playlist.get("lyrics")
     
     if lyrics_id:
-        lyrics_data = yt.get_lyrics(lyrics_id)
-        return jsonify(lyrics_data)
+        yt_lyrics = yt.get_lyrics(lyrics_id)
+        
+        # If YouTube Music HAS synced lyrics, return them!
+        if yt_lyrics.get("hasTimestamps"):
+            return {"source": "YouTube", "synced": True, "data": yt_lyrics['lyrics']}
+            
+    # 2. FALLBACK: YouTube only gave us plain text (or nothing).
+    # Let's bypass YouTube and ask Musixmatch/NetEase directly using syncedlyrics!
     
-    return jsonify({"error": "No lyrics found for this song."}), 404
+    search_query = f"{song_title} {artist_name}"
+    print(f"YouTube failed to give synced lyrics. Falling back to external providers for: {search_query}")
+    
+    # This searches Musixmatch, Lrclib, and NetEase for the LRC (synced) format
+    lrc_lyrics = syncedlyrics.search(search_query)
+    
+    if lrc_lyrics:
+        return {"source": "External (Musixmatch/Lrclib)", "synced": True, "data": lrc_lyrics}
+    
+    # 3. Final Fallback: Return YouTube's plain text if nothing else exists
+    if lyrics_id and yt_lyrics:
+        return {"source": "YouTube", "synced": False, "data": yt_lyrics['lyrics']}
+        
+    return {"error": "No lyrics found anywhere"}
